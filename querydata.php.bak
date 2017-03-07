@@ -1,0 +1,152 @@
+<?php
+   
+	 function transpose($array) {
+	 	$transposed_array = array();
+	 	if ($array) {
+	 		foreach ($array as $row_key => $row) {
+	 			if (is_array($row) && !empty($row)) { //check to see if there is a second dimension
+	 				foreach ($row as $column_key => $element) {
+	 					$transposed_array[$column_key][$row_key] = $element;
+	 				}
+	 			} else {
+	 				$transposed_array[0][$row_key] = $row;
+	 			}
+	 		}
+	 		return $transposed_array;
+	 	}
+	 }
+   
+   $input_service = isset($_GET['service']) ? $_GET['service'] : '';
+   $input_rownum = isset($_GET['rownum']) ? $_GET['rownum'] : '';
+   $input_start = isset($_GET['start']) ? $_GET['start'] : '';
+   $input_end = isset($_GET['end']) ? $_GET['end'] : '';
+   
+   putenv("ORACLE_HOME=/usr/lib/oracle/11.2/client64");
+   $dbusername = "stm"; // DB User
+   $dbpass = "stm"; // DB User password
+   $dbname = "VASDB"; // DB Name
+   $dbconnection = oci_connect($dbusername, $dbpass, $dbname);
+   $dbquery_list= "SELECT * 
+                   FROM (
+                          SELECT RESULT_CODE
+                          FROM REPORT_DATA
+                          WHERE SERVICE_NAME = ':SERVICE'
+                          AND END_DATE >= TO_DATE(':START','YYYYMMDDHH24MI')
+                          AND END_DATE < TO_DATE(':END','YYYYMMDDHH24MI')
+                          GROUP BY RESULT_CODE
+                          ORDER BY SUM(VALUE) DESC
+                   )
+                   WHERE ROWNUM <:ROWNUM;"
+                  
+   $dbquert_data = "SELECT * 
+                    FROM (
+                           SELECT END_DATE AS REPORT_DATE,RESULT_CODE,VALUE
+                           FROM REPORT_DATA
+                           WHERE SERVICE_NAME = ':SERVICE'
+                           AND END_DATE >= TO_DATE(':START','YYYYMMDDHH24MI')
+                           AND END_DATE < TO_DATE(':END','YYYYMMDDHH24MI')
+                    )
+                    PIVOT (
+                            SUM(VALUE)
+                            FOR RESULT_CODE IN (:LIST)
+                    )
+                    ORDER BY END_DATE;"
+                    
+   
+   
+   
+                
+   if (!$dbconnection) {
+     $e = oci_error();  // For oci_execute errors pass the statement handle
+     print htmlentities($e['message']);
+   }
+   
+   oci_execute(oci_parse($dbconnection, "ALTER SESSION SET NLS_DATE_FORMAT = 'DD/MM/YYYY HH24:MI:SS'"));
+   
+   $dbresult_list = oci_parse($dbconnection, $dbquery_list);
+   oci_bind_by_name($dbresult_data, ":SERVICE", $input_service);
+   oci_bind_by_name($dbresult_list, ":ROWNUM", $input_rownum);
+   oci_bind_by_name($dbresult_list, ":START", $input_start);
+   oci_bind_by_name($dbresult_list, ":END", $input_end);
+   $r = oci_execute($dbresult_list);
+   if (!$r) {
+     $e = oci_error($dbresult_list);  // For oci_execute errors pass the statement handle
+     print htmlentities($e['message']);
+     print "\n<pre>\n";
+     print htmlentities($e['sqltext']);
+     printf("\n%".($e['offset']+1)."s", "^");
+     print  "\n</pre>\n";
+   }
+   
+   $errorlist = NULL;
+   while(($row = oci_fetch_array($dbresult_list, OCI_ASSOC+OCI_RETURN_NULLS)) != false) {
+   	 if (is_null($errorlist)) {
+   	 	 $errorlist = "'".$row."'";
+   	 } else {
+   	 	 $errorlist = $errorlist.",'".$row."'";
+   	 }
+   }
+   oci_free_statement($dbresult_list);
+   
+   
+   
+   
+   $dbresult_data = oci_parse($dbconnection, $dbquert_data);
+   oci_bind_by_name($dbresult_data, ":SERVICE", $input_service);
+   oci_bind_by_name($dbresult_data, ":LIST", $errorlist);
+   oci_bind_by_name($dbresult_data, ":START", $input_start);
+   oci_bind_by_name($dbresult_data, ":END", $input_end);
+
+   
+   
+   $s = oci_execute($dbresult_data);
+   if (!$s) {
+     $e = oci_error($dbresult_data);  // For oci_execute errors pass the statement handle
+     print htmlentities($e['message']);
+     print "\n<pre>\n";
+     print htmlentities($e['sqltext']);
+     printf("\n%".($e['offset']+1)."s", "^");
+     print  "\n</pre>\n";
+   }
+   
+   $dbnumfields = oci_num_fields($dbresult_data);
+   $dbcolumnname = array();
+   for($i=0; $i<$dbnumfields; $i++) {
+   	 $dbcolumnname[$i] = oci_field_name($dbresult_data, $i);
+   }
+   
+   $array_data = array();
+   $array_date = array();
+   /*while(($row = oci_fetch_array($dbresult_data, OCI_ASSOC+OCI_RETURN_NULLS)) != false) {
+   	 $count = 0;
+   	 $array_date[$count] = strtotime($row[0]) * 1000;;
+   	 for($i=1; $i<$dbnumfields; $i++) {
+   	 	 if(is_null($row[$i])) {
+   	 	 	 $array_data[$i-1][$count] = $row[$i];
+   	 	 } else {
+   	 	 	 $array_data[$i-1][$count] = 0;
+   	 	 }
+   	 }
+   	 $count++
+   } */
+   
+   while(($row = oci_fetch_array($dbresult_data, OCI_ASSOC+OCI_RETURN_NULLS)) != false) {
+   	 $count = 0;
+   	 $report_date = strtotime($row[0]) * 1000;
+   	 for($i=1; $i<$dbnumfields; $i++) {
+   	 	 if(is_null($row[$i])) {
+   	 	 	 $array_data[] = array('name'=>$dbcolumnname[$i],'data'=>array($report_date,0));
+   	 	 } else {
+   	 	 	 $array_data[] = array('name'=>$dbcolumnname[$i],'data'=>array($report_date,$row[$i]));
+   	 	 }
+   	 }
+   	 $count++
+   }
+   
+   oci_free_statement($dbresult_data);
+   oci_close($dbconnection);
+   
+   echo json_encode($array_data,JSON_NUMERIC_CHECK );
+	 $jsonData = json_encode($array_data,JSON_NUMERIC_CHECK );
+   
+?>
